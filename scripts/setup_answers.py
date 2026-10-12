@@ -8,7 +8,7 @@ Yêu cầu:
     1. Có 5 module m1-m5 với giao diện trong doc/PIPELINE_INTERFACE.md
        Script tự lắp module; không gọi src/pipeline.py.
     2. docker compose -f infra/docker-compose.yml up -d  (Qdrant đang chạy trên port 6333)
-    3. .env có OPENAI_API_KEY
+    3. .env có GEMINI_API_KEY từ Google AI Studio
 """
 from __future__ import annotations
 
@@ -83,23 +83,23 @@ def build_pipeline():
 
 
 def run_query(q: str, search, reranker, top_k: int, client=None) -> tuple[str, list[str], str, str | None]:
-    from config import OPENAI_API_KEY
+    from config import GEMINI_API_KEY
 
     results = search.search(q)
     docs    = [{"text": r.text, "score": r.score, "metadata": r.metadata} for r in results]
     reranked = reranker.rerank(q, docs, top_k=top_k)
     contexts = [r.text for r in reranked] if reranked else [r.text for r in results[:3]]
 
-    if (OPENAI_API_KEY or client is not None) and contexts:
+    if (GEMINI_API_KEY or client is not None) and contexts:
         try:
             if client is None:
-                from openai import OpenAI
-                client = OpenAI()
+                from src.llm import gemini_openai_client
+                client = gemini_openai_client()
             ctx = "\n\n".join(contexts)
             resp = client.chat.completions.create(
                 model=GENERATION_MODEL,
                 messages=[
-                    {"role": "system", "content": "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"},
+                    {"role": "system", "content": "Trả lời bằng một câu hoàn chỉnh bằng tiếng Việt, chỉ dựa trên context; không trả lời bằng số hoặc cụm từ rời. Nếu context không đủ căn cứ, nói rõ không tìm thấy thông tin trong ngữ cảnh."},
                     {"role": "user",   "content": f"Context:\n{ctx}\n\nCâu hỏi: {q}"},
                 ],
             )
@@ -138,11 +138,11 @@ def main(argv=None):
 
     print(f"\nRunning {len(test_set)} queries...")
     answers = []
-    from config import OPENAI_API_KEY
+    from config import GEMINI_API_KEY
     client = None
-    if OPENAI_API_KEY:
-        from openai import OpenAI
-        client = OpenAI()
+    if GEMINI_API_KEY:
+        from src.llm import gemini_openai_client
+        client = gemini_openai_client()
     t_start = time.time()
 
     for i, item in enumerate(test_set):

@@ -53,13 +53,14 @@ giá trị ví dụ này làm report.
 
 `build_pipeline()` trả `(search, reranker, top_k)`.
 `run_query(q, search, reranker, top_k, client=None)` trả
-`(answer, contexts, generation_mode, generation_model)`. Client OpenAI được reuse qua 50 câu,
+`(answer, contexts, generation_mode, generation_model)`. Google AI Studio client được reuse qua 50 câu,
 không khởi tạo lại cho mỗi query. `generation_mode` là `llm` hoặc
 `extractive_fallback`; fallback khi không có key/contexts hoặc generation lỗi
 phải được mô tả trong phân tích.
 `generation_model` ghi model identifier provider trả về nếu có, hoặc model ID
 đã truyền vào lời gọi generation; dùng `null` khi extractive fallback. Generation
-dùng `config.GENERATION_MODEL`, tách khỏi `config.JUDGE_MODEL`.
+dùng `config.GENERATION_MODEL`, tách khỏi `config.JUDGE_MODEL`. Cả hai mặc định
+dùng model `gemini-3.5-flash-lite`; API key lấy từ `GEMINI_API_KEY` trong `.env`.
 
 `artifacts/answers_50q.json` có đúng 50 id từ test set, question/distribution/ground_truth
 khớp nguồn. Không thay answer bằng ground_truth. Trước Phase A, xác nhận contexts

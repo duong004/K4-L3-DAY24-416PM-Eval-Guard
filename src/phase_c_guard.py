@@ -10,7 +10,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import ADVERSARIAL_SET_PATH, GUARDRAILS_CONFIG_DIR, LATENCY_BUDGET_P95_MS, PRESIDIO_LANGUAGE
+from config import (ADVERSARIAL_SET_PATH, GEMINI_API_KEY, GUARDRAILS_CONFIG_DIR,
+                    LATENCY_BUDGET_P95_MS, PRESIDIO_LANGUAGE)
 
 
 # ─── Task 9a: Presidio PII Detection ─────────────────────────────────────────
@@ -86,6 +87,12 @@ def setup_nemo_rails():
         config.yml  — model + rails config
         rails.co    — câu từ chối Colang 1.0; built-in self-check flows được bật trong YAML
     """
+    if not GEMINI_API_KEY:
+        raise ValueError("Set GEMINI_API_KEY from Google AI Studio to use NeMo's LLM rail")
+    # NeMo 0.10's OpenAI-compatible engine reads these standard client settings.
+    from src.llm import GEMINI_BASE_URL
+    os.environ["OPENAI_API_KEY"] = GEMINI_API_KEY
+    os.environ["OPENAI_API_BASE"] = GEMINI_BASE_URL
     from nemoguardrails import RailsConfig, LLMRails
     config = RailsConfig.from_path(GUARDRAILS_CONFIG_DIR)
     rails  = LLMRails(config)

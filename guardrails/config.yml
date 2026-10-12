@@ -2,8 +2,9 @@ colang_version: "1.0"
 
 models:
   - type: main
+    # NeMo's OpenAI-compatible adapter is routed to Google AI Studio by setup_nemo_rails().
     engine: openai
-    model: gpt-4o-mini
+    model: gemini-3.5-flash-lite
 
 instructions:
   - type: general

@@ -6,8 +6,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- API Keys ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 HF_TOKEN = os.getenv("HF_TOKEN", "")  # Optional: for HuggingFace models
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 # --- Qdrant (same as Day 18) ---
 QDRANT_HOST = "localhost"
@@ -45,8 +46,8 @@ GUARDRAILS_CONFIG_DIR = os.path.join(ROOT_DIR, "guardrails")
 PAIR_QUESTION_IDS = (1, 5, 12, 21, 41)
 
 # --- LLM Judge ---
-GENERATION_MODEL = "gpt-4o-mini"
-JUDGE_MODEL = "gpt-4o-mini"
+GENERATION_MODEL = GEMINI_MODEL
+JUDGE_MODEL = GEMINI_MODEL
 
 # --- Guardrail latency budget ---
 LATENCY_BUDGET_P95_MS = 500  # Full guard target; Task 12 currently measures input guards only.
