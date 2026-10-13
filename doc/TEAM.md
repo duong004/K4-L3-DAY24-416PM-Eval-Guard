@@ -8,7 +8,7 @@ Trưởng nhóm/người nộp: Tạ Đăng Dương - 2A202603018
 
 Ngày lab/deadline áp dụng: 11:59 AM (13/10/2026), Asia/Ho_Chi_Minh (UTC+07:00)
 
-Commit dùng để chấm: Chưa chốt — cập nhật bằng SHA của commit cuối trên `main` trước khi gửi link.
+Commit dùng để chấm: `81dbfd8c9e557354620f6512ae175ddae737885d`
 
 Mỗi nhóm nộp một repo. Điền đủ thành viên và một mục INDIVIDUAL cho từng người.
 Thêm/xóa rows để khớp nhóm thật; mẫu ba rows không ép nhóm phải có ba người.
