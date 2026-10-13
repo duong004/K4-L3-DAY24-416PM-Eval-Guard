@@ -72,7 +72,7 @@ def _call_with_retry(fn, *args, **kwargs):
             return fn(*args, **kwargs)
         except Exception as exc:
             msg = str(exc)
-            if ("429" in msg or "RESOURCE_EXHAUSTED" in msg or "RateLimitError" in type(exc).__name__) and attempt < 7:
+            if ("429" in msg or "RESOURCE_EXHAUSTED" in msg or "RateLimitError" in type(exc).__name__ or type(exc).__name__ in ("APIConnectionError", "APITimeoutError")) and attempt < 7:
                 delay = _parse_retry_delay(msg)
                 print(f"[RateLimit 429] Waiting {delay:.1f}s before retry {attempt + 1}/7...", flush=True)
                 time.sleep(delay)
@@ -119,7 +119,7 @@ def gemini_chat_model(temperature: float = 0, model: str | None = None):
                     return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
                 except Exception as exc:
                     msg = str(exc)
-                    if ("429" in msg or "RESOURCE_EXHAUSTED" in msg or "RateLimitError" in type(exc).__name__) and attempt < 7:
+                    if ("429" in msg or "RESOURCE_EXHAUSTED" in msg or "RateLimitError" in type(exc).__name__ or type(exc).__name__ in ("APIConnectionError", "APITimeoutError")) and attempt < 7:
                         delay = _parse_retry_delay(msg)
                         print(f"[RateLimit 429] Waiting {delay:.1f}s before async retry {attempt + 1}/7...", flush=True)
                         await asyncio.sleep(delay)

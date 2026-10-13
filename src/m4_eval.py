@@ -43,7 +43,7 @@ def _normalize_ragas_json_text(text: str) -> str:
     try:
         parsed = json.loads(candidate)
     except Exception:
-        if "verdict" in candidate and "reason" in candidate:
+        if "verdict" in candidate and "reason" in candidate and candidate.lstrip().startswith("{"):
             v_match = re.search(r'"verdict"\s*:\s*([01]|true|false|"[01]")', candidate, flags=re.IGNORECASE)
             r_match = re.search(r'"reason"\s*:\s*"([\s\S]*?)"\s*,\s*"verdict"', candidate)
             if not r_match:
@@ -56,7 +56,7 @@ def _normalize_ragas_json_text(text: str) -> str:
         return text
 
     if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
-        if "verdict" in parsed[0] and "statements" not in parsed[0]:
+        if "verdict" in parsed[0] and not ({"statement", "statements"} & set(parsed[0])):
             parsed = parsed[0]
 
     if isinstance(parsed, dict):
@@ -79,9 +79,18 @@ def _normalize_ragas_json_text(text: str) -> str:
     return text
 
 
+def _log_raw_output(text):
+    path = os.environ.get("RAGAS_RAW_LOG")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"raw": text}, ensure_ascii=False) + "\n")
+
+
 def _normalize_chat_result(chat_result):
     for gen in getattr(chat_result, "generations", []):
         if hasattr(gen, "message") and isinstance(getattr(gen.message, "content", None), str):
+            _log_raw_output(gen.message.content)
             fixed = _normalize_ragas_json_text(gen.message.content)
             gen.message.content = fixed
             if hasattr(gen, "text"):
@@ -188,35 +197,65 @@ def evaluate_ragas(questions: list[str], answers: list[str],
     object.__setattr__(base_chat_model, "_agenerate", norm_agen)
 
     llm = LangchainLLMWrapper(base_chat_model)
+    # Context Precision: yêu cầu Gemini trả JSON object (reason: str, verdict: 0/1).
+    # Chỉ ép định dạng output; không tự gán điểm khi lỗi.
+    cp_chat_model = gemini_chat_model(temperature=0)
+    cp_chat_model.model_kwargs = {**(cp_chat_model.model_kwargs or {}),
+                                  "response_format": {"type": "json_object"}}
+    cp_orig_gen = cp_chat_model._generate
+    cp_orig_agen = cp_chat_model._agenerate
+
+    def cp_norm_gen(*args, **kwargs):
+        return _normalize_chat_result(cp_orig_gen(*args, **kwargs))
+
+    async def cp_norm_agen(*args, **kwargs):
+        return _normalize_chat_result(await cp_orig_agen(*args, **kwargs))
+
+    object.__setattr__(cp_chat_model, "_generate", cp_norm_gen)
+    object.__setattr__(cp_chat_model, "_agenerate", cp_norm_agen)
+    context_precision.llm = LangchainLLMWrapper(cp_chat_model)
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3", model_kwargs={"device": "cpu"})
     run_config = RunConfig(max_workers=1, max_retries=2, timeout=120)
-    for start in range(0, len(questions), RAGAS_BATCH_SIZE):
-        stop = min(start + RAGAS_BATCH_SIZE, len(questions))
-        batch_label = f"{start}:{stop}"
-        if all(index in cached for index in range(start, stop)):
-            continue
-        print(f"[RAGAS] Running batch {batch_label} (questions ID {start + 1}..{stop})...", flush=True)
+    missing = [index for index in range(len(questions)) if index not in cached]
+    all_failures = []
+    for chunk_start in range(0, len(missing), RAGAS_BATCH_SIZE):
+        chunk = missing[chunk_start:chunk_start + RAGAS_BATCH_SIZE]
+        batch_label = "IDs " + ",".join(str(index + 1) for index in chunk)
+        print(f"[RAGAS] Running {batch_label}...", flush=True)
         dataset = Dataset.from_dict({
-            "question": questions[start:stop], "answer": answers[start:stop],
-            "contexts": contexts[start:stop], "ground_truth": ground_truths[start:stop],
+            "question": [questions[i] for i in chunk],
+            "answer": [answers[i] for i in chunk],
+            "contexts": [contexts[i] for i in chunk],
+            "ground_truth": [ground_truths[i] for i in chunk],
         })
         result = evaluate(dataset, metrics=metrics, llm=llm, embeddings=embeddings,
                           run_config=run_config)
         rows = result.to_pandas().to_dict(orient="records")
-        if len(rows) != stop - start:
-            raise ValueError(f"RAGAS returned {len(rows)} rows for batch {batch_label}")
-        batch = {}
-        for index, row in enumerate(rows, start):
-            batch[index] = {
+        if len(rows) != len(chunk):
+            raise ValueError(f"RAGAS returned {len(rows)} rows for {batch_label}")
+        failures = []
+        for index, row in zip(chunk, rows):
+            scores, bad = {}, []
+            for name in metric_names:
+                try:
+                    scores[name] = _finite_score(row[name], metric=name, index=index,
+                                                 batch_range=batch_label)
+                except ValueError as exc:
+                    bad.append(str(exc))
+            if bad:
+                failures.extend(bad)
+                continue
+            cached[index] = {
                 "question": questions[index], "answer": answers[index],
                 "contexts": contexts[index], "ground_truth": ground_truths[index],
-                **{name: _finite_score(row[name], metric=name, index=index, batch_range=batch_label)
-                   for name in metric_names},
+                **scores,
             }
-        cached.update(batch)
         save_checkpoint()
-        print(f"[RAGAS] Saved batch {batch_label} ({len(cached)}/{len(questions)} completed).", flush=True)
+        print(f"[RAGAS] Checkpoint: {len(cached)}/{len(questions)} câu hợp lệ đã lưu.", flush=True)
+        all_failures.extend(failures)
 
+    if all_failures:
+        raise ValueError("RAGAS invalid scores (các câu hợp lệ đã lưu):\n" + "\n".join(all_failures))
     if len(cached) != len(questions):
         raise ValueError(f"RAGAS checkpoint has {len(cached)} rows for {len(questions)} questions")
     per_question = [EvalResult(**cached[index]) for index in range(len(questions))]
