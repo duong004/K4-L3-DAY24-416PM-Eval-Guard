@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Module 4: RAGAS Evaluation — 4 metrics + failure analysis."""
 
-import os, sys, json, math, hashlib, tempfile
+import os, sys, json, math, hashlib, tempfile, re
 from importlib.metadata import version
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -18,11 +18,78 @@ RAGAS_BATCH_SIZE = 5
 RAGAS_CHECKPOINT = os.path.join(ARTIFACTS_DIR, "ragas_50q.partial.json")
 
 
-def _finite_score(value) -> float:
-    score = float(value)
+def _finite_score(value, *, metric: str = "unknown", index: int | None = None,
+                  batch_range: str = "") -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as exc:
+        loc = f" (metric={metric}, row_index={index}, question_id={index + 1 if index is not None else '?'}, batch={batch_range})"
+        raise ValueError(f"RAGAS returned non-numeric metric score: {value!r}{loc}") from exc
     if not math.isfinite(score) or not 0 <= score <= 1:
-        raise ValueError(f"RAGAS returned invalid metric score: {score!r}")
+        loc = f" (metric={metric}, row_index={index}, question_id={index + 1 if index is not None else '?'}, batch={batch_range})"
+        raise ValueError(f"RAGAS returned invalid metric score: {score!r}{loc}")
     return score
+
+
+def _normalize_ragas_json_text(text: str) -> str:
+    """Ensure valid JSON for RAGAS outputs when Gemini wraps schema or leaves inner quotes unescaped."""
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped, flags=re.IGNORECASE)
+    candidate = fence_match.group(1).strip() if fence_match else stripped
+
+    parsed = None
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        if "verdict" in candidate and "reason" in candidate:
+            v_match = re.search(r'"verdict"\s*:\s*([01]|true|false|"[01]")', candidate, flags=re.IGNORECASE)
+            r_match = re.search(r'"reason"\s*:\s*"([\s\S]*?)"\s*,\s*"verdict"', candidate)
+            if not r_match:
+                r_match = re.search(r'"reason"\s*:\s*"([\s\S]*)"\s*\}', candidate)
+            if v_match and r_match:
+                raw_v = v_match.group(1).strip('"').lower()
+                verdict_int = 1 if raw_v in ("1", "true") else 0
+                reason_clean = r_match.group(1).replace('\\"', '"').strip()
+                return json.dumps({"reason": reason_clean, "verdict": verdict_int}, ensure_ascii=False)
+        return text
+
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        if "verdict" in parsed[0] and "statements" not in parsed[0]:
+            parsed = parsed[0]
+
+    if isinstance(parsed, dict):
+        if "properties" in parsed and isinstance(parsed["properties"], dict) and "verdict" not in parsed:
+            props = parsed["properties"]
+            if "verdict" in props or "reason" in props:
+                parsed = props
+        if "verdict" in parsed or "reason" in parsed:
+            if "verdict" in parsed:
+                v = parsed["verdict"]
+                if isinstance(v, bool):
+                    parsed["verdict"] = 1 if v else 0
+                elif isinstance(v, str) and v.strip() in ("0", "1"):
+                    parsed["verdict"] = int(v.strip())
+            if "verdict" in parsed and "reason" not in parsed:
+                parsed["reason"] = str(parsed.get("explanation") or parsed.get("reasoning") or "Verified against context.")
+            elif "reason" in parsed and not isinstance(parsed["reason"], str):
+                parsed["reason"] = str(parsed["reason"])
+            return json.dumps(parsed, ensure_ascii=False)
+    return text
+
+
+def _normalize_chat_result(chat_result):
+    for gen in getattr(chat_result, "generations", []):
+        if hasattr(gen, "message") and isinstance(getattr(gen.message, "content", None), str):
+            fixed = _normalize_ragas_json_text(gen.message.content)
+            gen.message.content = fixed
+            if hasattr(gen, "text"):
+                try:
+                    gen.text = fixed
+                except Exception:
+                    pass
+    return chat_result
 
 
 @dataclass
@@ -70,9 +137,14 @@ def evaluate_ragas(questions: list[str], answers: list[str],
             checkpoint = json.load(stream)
         if checkpoint.get("input_sha256") == signature:
             cached = {
-                int(index): {**row, **{name: _finite_score(row[name]) for name in metric_names}}
+                int(index): {
+                    **row,
+                    **{name: _finite_score(row[name], metric=name, index=int(index), batch_range="checkpoint")
+                       for name in metric_names}
+                }
                 for index, row in checkpoint.get("rows", {}).items()
             }
+            print(f"[RAGAS] Loaded {len(cached)}/{len(questions)} cached rows from checkpoint.", flush=True)
 
     def save_checkpoint():
         os.makedirs(ARTIFACTS_DIR, exist_ok=True)
@@ -90,14 +162,40 @@ def evaluate_ragas(questions: list[str], answers: list[str],
                 os.unlink(temp_path)
 
     answer_relevancy.strictness = 1
+    if hasattr(context_precision, "context_precision_prompt") and hasattr(
+        context_precision.context_precision_prompt, "instruction"
+    ):
+        extra_rule = (
+            "\nIMPORTANT: Return ONLY a valid JSON object with BOTH required keys: "
+            "\"reason\" (non-empty string; use single quotes instead of double quotes inside the text) "
+            "and \"verdict\" (integer 0 or 1). Do NOT wrap the output in a \"properties\" key."
+        )
+        if "BOTH required keys" not in context_precision.context_precision_prompt.instruction:
+            context_precision.context_precision_prompt.instruction += extra_rule
+
     metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
-    llm = LangchainLLMWrapper(gemini_chat_model(temperature=0))
+    base_chat_model = gemini_chat_model(temperature=0)
+    orig_gen = base_chat_model._generate
+    orig_agen = base_chat_model._agenerate
+
+    def norm_gen(*args, **kwargs):
+        return _normalize_chat_result(orig_gen(*args, **kwargs))
+
+    async def norm_agen(*args, **kwargs):
+        return _normalize_chat_result(await orig_agen(*args, **kwargs))
+
+    object.__setattr__(base_chat_model, "_generate", norm_gen)
+    object.__setattr__(base_chat_model, "_agenerate", norm_agen)
+
+    llm = LangchainLLMWrapper(base_chat_model)
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3", model_kwargs={"device": "cpu"})
     run_config = RunConfig(max_workers=1, max_retries=2, timeout=120)
     for start in range(0, len(questions), RAGAS_BATCH_SIZE):
         stop = min(start + RAGAS_BATCH_SIZE, len(questions))
+        batch_label = f"{start}:{stop}"
         if all(index in cached for index in range(start, stop)):
             continue
+        print(f"[RAGAS] Running batch {batch_label} (questions ID {start + 1}..{stop})...", flush=True)
         dataset = Dataset.from_dict({
             "question": questions[start:stop], "answer": answers[start:stop],
             "contexts": contexts[start:stop], "ground_truth": ground_truths[start:stop],
@@ -106,21 +204,24 @@ def evaluate_ragas(questions: list[str], answers: list[str],
                           run_config=run_config)
         rows = result.to_pandas().to_dict(orient="records")
         if len(rows) != stop - start:
-            raise ValueError(f"RAGAS returned {len(rows)} rows for batch {start}:{stop}")
+            raise ValueError(f"RAGAS returned {len(rows)} rows for batch {batch_label}")
         batch = {}
         for index, row in enumerate(rows, start):
             batch[index] = {
                 "question": questions[index], "answer": answers[index],
                 "contexts": contexts[index], "ground_truth": ground_truths[index],
-                **{name: _finite_score(row[name]) for name in metric_names},
+                **{name: _finite_score(row[name], metric=name, index=index, batch_range=batch_label)
+                   for name in metric_names},
             }
         cached.update(batch)
         save_checkpoint()
+        print(f"[RAGAS] Saved batch {batch_label} ({len(cached)}/{len(questions)} completed).", flush=True)
 
     if len(cached) != len(questions):
         raise ValueError(f"RAGAS checkpoint has {len(cached)} rows for {len(questions)} questions")
     per_question = [EvalResult(**cached[index]) for index in range(len(questions))]
-    aggregate = {name: _finite_score(sum(getattr(row, name) for row in per_question) / len(per_question))
+    aggregate = {name: _finite_score(sum(getattr(row, name) for row in per_question) / len(per_question),
+                                     metric=name, batch_range="aggregate")
                  for name in metric_names}
     return {**aggregate, "evaluation_status": "completed",
             "metadata": {"evaluator_models": [GEMINI_MODEL, "BAAI/bge-m3"]},
