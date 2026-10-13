@@ -18,7 +18,7 @@ Thêm/xóa rows để khớp nhóm thật; mẫu ba rows không ép nhóm phải
 | STT | Họ và tên | MSSV | Vai trò / công việc thật | Bằng chứng |
 |---|---|---|---|---|
 | 1 | Lê Minh Hiếu | 2A202602828 | Phase C — Security & Guardrails: `src/phase_c_guard.py` (Tasks 9a, 9b, 10, 11, 12), `guardrails/config.yml`, `guardrails/config.py` | `artifacts/guard_results.json`, bảng Latency trong `doc/reports/blueprint.md`, commit Phase C |
-| 2 | {{Họ tên}} | {{MSSV}} | {{Phase/file/hàm}} | {{Commit/PR/report}} |
+| 2 | Trần Nam Anh | 2A202602901 | Tích hợp Gemini RAG pipeline và triển khai Phase A evaluator | Commit `0866832895e8187b171cee71e3fc14d914d94b7c`; `src/m1_chunking.py`–`src/m5_enrichment.py`, `src/phase_a_ragas.py`, `src/m4_eval.py`, `artifacts/answers_50q.json`, `doc/ENVIRONMENT.md`, `doc/reports/failure_clusters.md` |
 | 3 | {{Họ tên}} | {{MSSV}} | {{Phase/file/hàm}} | {{Commit/PR/report}} |
 
 Người tích hợp/chạy batch/nộp link: {{Họ tên, công việc và bằng chứng}}.
@@ -50,6 +50,11 @@ Sao chép mẫu cho mỗi thành viên; tiêu đề họ tên không dấu-MSSV.
   chỉ giữ recognizer VN; NER mặc định (PERSON/DATE_TIME…) bị loại để tránh chặn nhầm.
   (5) Bộ 20/8/4 nhỏ, kết quả LLM rail có thể dao động giữa các lần chạy; latency phụ thuộc mạng/tải free tier; NeMo output, RAG và full guard chưa đo.
 - Nguồn/AI hỗ trợ nếu có: Claude Code hỗ trợ implement, debug cấu hình NeMo; tự kiểm chứng bằng mock tests, live run, check_lab.py và đọc guard_results.json.
+
+### Tran Nam Anh-2A202602901
+- Phần được giao và phần thực tế đã làm: Mình tích hợp pipeline RAG dùng Gemini, bổ sung các module m1–m5 và cấu hình provider. Mình triển khai Phase A để nhóm câu trả lời theo loại, tính điểm, lấy 10 câu có điểm thấp nhất và phân tích cụm lỗi. Mình cũng lưu bộ 50 câu trả lời đã tạo, thêm checkpoint để có thể tiếp tục chạy RAGAS sau khi gián đoạn, và ghi lại hướng dẫn môi trường cùng phân tích lỗi hiện tại.
+- Bằng chứng: Commit `0866832895e8187b171cee71e3fc14d914d94b7c`; `src/m1_chunking.py`–`src/m5_enrichment.py`, `src/phase_a_ragas.py`, `src/m4_eval.py`, `artifacts/answers_50q.json`, `doc/ENVIRONMENT.md`, `doc/reports/failure_clusters.md`.
+- Kết quả và giới hạn: Bộ 50 câu trả lời đã được lưu để dùng cho đánh giá. Kết quả chạy RAGAS trực tiếp chưa hoàn tất vì có metric trả về `NaN`; do đó chưa tạo được `ragas_50q.json` và phần Bonus chưa được xác minh.
 
 ## Cập nhật sau khi nộp
 
