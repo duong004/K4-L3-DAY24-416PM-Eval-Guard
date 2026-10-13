@@ -17,7 +17,7 @@ Thêm/xóa rows để khớp nhóm thật; mẫu ba rows không ép nhóm phải
 
 | STT | Họ và tên | MSSV | Vai trò / công việc thật | Bằng chứng |
 |---|---|---|---|---|
-| 1 | {{Họ tên}} | {{MSSV}} | {{Phase/file/hàm}} | {{Commit/PR/report}} |
+| 1 | Lê Minh Hiếu | 2A202602828 | Phase C — Security & Guardrails: `src/phase_c_guard.py` (Tasks 9a, 9b, 10, 11, 12), `guardrails/config.yml`, `guardrails/config.py` | `artifacts/guard_results.json`, bảng Latency trong `doc/reports/blueprint.md`, commit Phase C |
 | 2 | {{Họ tên}} | {{MSSV}} | {{Phase/file/hàm}} | {{Commit/PR/report}} |
 | 3 | {{Họ tên}} | {{MSSV}} | {{Phase/file/hàm}} | {{Commit/PR/report}} |
 
@@ -35,14 +35,21 @@ hoặc pip resolve để khẳng định runtime đã chạy.
 
 Sao chép mẫu cho mỗi thành viên; tiêu đề họ tên không dấu-MSSV.
 
-### {{HoVaTen}}-{{MSSV}}
-
-- Phần được giao và phần thực tế đã làm: {{Nhiệm vụ, file/hàm, mục đích}}.
-- Bằng chứng: {{Commit/PR và artifacts/reports liên quan}}.
-- Cách kiểm tra: {{Unit mock hoặc live experiment, lệnh và kết quả}}.
-- Điều đã học: {{Khái niệm và cách thể hiện trong bài}}.
-- Giới hạn/cách xử lý: {{Vấn đề và kiểm chứng}}.
-- Nguồn/AI hỗ trợ nếu có: {{Công cụ, phạm vi, cách tự kiểm chứng}}.
+### Lê Minh Hiếu-2A202602828
+- Phần được giao và phần thực tế đã làm: Security & Guardrails Engineer — Phase C. Implement trong `src/phase_c_guard.py`: `pii_scan` (Presidio, giữ VN_CCCD/CMND, VN_PHONE, EMAIL_ADDRESS; trả entities kèm start/end và text đã ẩn danh `<TYPE>`), `check_input_rail` (async, chỉ chạy input rail, quyết định đọc từ `result.log.activated_rails[].stop`, không dò từ khóa), `run_adversarial_suite` (28 inputs trong một event loop, Presidio → NeMo input), `check_output_rail` (giữ nguyên answer sạch, thay bằng câu từ chối khi rail chặn), `measure_p95_latency` (2 warm-up thật, 20 samples, luôn đo cả Presidio và NeMo input). Sửa cấu hình NeMo để chạy được với Gemini (xem Giới hạn).
+- Bằng chứng: `artifacts/guard_results.json` (run 2026-10-13T03:51:54Z, guard model gemini-3.5-flash-lite); bảng Latency trong `doc/reports/blueprint.md`.
+- Cách kiểm tra: `python -m pytest tests/test_phase_c.py -q` → 12 passed (mock).
+  Live: `GUARD_RAIL_MIN_INTERVAL_S=4.5 python scripts/run_experiments.py --phase c --live --latency-samples 20`
+  → attacks 20/20 blocked (presidio 4, nemo_input 16), clean 8/8 allowed (FPR 0.0), output 4/4 đúng; `python scripts/check_lab.py` → PASS Phase C artifact. Latency input_layers_sequential: Presidio P95 7.24ms, NeMo input P95 1135.01ms, tổng P95 1141.81ms → vượt budget 500ms (latency_budget_ok=false).
+- Điều đã học: defense-in-depth — tầng regex/NER cục bộ (Presidio) rẻ và nhanh cho PII có cấu trúc, tầng LLM rail bắt jailbreak/off-topic/prompt injection theo ngữ nghĩa; clean controls cần thiết vì guard "chặn hết" cũng đạt 20/20 attacks; quyết định phải lấy từ rail engine chứ không từ câu chữ ("Xin lỗi, tôi không thể…" có trong câu sạch 102); percentile cần raw samples và loại warm-up.
+- Giới hạn/cách xử lý:
+  (1) NeMo 0.10 chỉ dùng ChatOpenAI cho model tên "gpt-3.5/gpt-4", còn lại gọi `/completions` → Gemini trả 404. Xử lý: `guardrails/config.py` đăng ký provider `openai_chat` = ChatOpenAI, truyền `model_name` qua `parameters`.
+  (2) Self-check mặc định `max_tokens=3`; Gemini dùng hết cho suy luận nội bộ, trả content rỗng (finish_reason=length) → NeMo parse thành unsafe, chặn cả câu sạch. Kiểm chứng bằng gọi API trực tiếp; xử lý: `max_tokens: 64` trong prompts.
+  (3) Free tier 15 RPM → 429; thêm `GUARD_RAIL_MIN_INTERVAL_S` giãn lượt gọi, phần chờ nằm ngoài vùng đo nên không làm sai latency.
+  (4) PHONE_NUMBER quốc tế của Presidio nhận nhầm CCCD 12 số thành số điện thoại nên
+  chỉ giữ recognizer VN; NER mặc định (PERSON/DATE_TIME…) bị loại để tránh chặn nhầm.
+  (5) Bộ 20/8/4 nhỏ, kết quả LLM rail có thể dao động giữa các lần chạy; latency phụ thuộc mạng/tải free tier; NeMo output, RAG và full guard chưa đo.
+- Nguồn/AI hỗ trợ nếu có: Claude Code hỗ trợ implement, debug cấu hình NeMo; tự kiểm chứng bằng mock tests, live run, check_lab.py và đọc guard_results.json.
 
 ## Cập nhật sau khi nộp
 
